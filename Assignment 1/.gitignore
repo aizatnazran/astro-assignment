@@ -1,0 +1,20 @@
+# Ignore Terraform state files
+terraform.tfstate
+terraform.tfstate.backup
+
+# Ignore the .terraform directory (caches plugins and providers)
+.terraform/
+
+# Ignore lock file (optional, can regenerate during `terraform init`)
+.terraform.lock.hcl
+
+# Ignore log files (if any are generated)
+*.log
+
+# Ignore system files (for macOS and Windows)
+.DS_Store
+Thumbs.db
+
+# Ignore temporary files
+*.tmp
+*.bak
