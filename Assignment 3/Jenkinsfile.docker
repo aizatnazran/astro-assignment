@@ -1,0 +1,121 @@
+pipeline {
+    agent any
+    stages {
+        stage('Clean Workspace') {
+            steps {
+                cleanWs() 
+            }
+        }
+
+        stage('Checkout Code') {
+            steps {
+                scmSkip(deleteBuild: true, skipPattern: '.*\\[ci skip\\].*')
+
+                checkout([$class: 'GitSCM',
+                    branches: [[name: '*/master']],
+                    doGenerateSubmoduleConfigurations: false,
+                    extensions: [],
+                    userRemoteConfigs: [[
+                        url: 'https://github.com/aizatnazran/devops-project-planner.git',
+                        credentialsId: 'github-credentials'
+                    ]]
+                ])
+            }
+        }
+
+        stage('Stop and Remove Specific Containers') {
+            steps {
+                script {
+                    sh """
+                    TARGET_CONTAINERS="deploy-planner-frontend deploy-planner-backend"
+                    
+                    for CONTAINER in \$TARGET_CONTAINERS; do
+                        CONTAINER_ID=\$(docker ps -q --filter "name=\$CONTAINER")
+                        if [ -n "\$CONTAINER_ID" ]; then
+                            echo "Stopping container: \$CONTAINER (\$CONTAINER_ID)"
+                            timeout 60s docker stop \$CONTAINER_ID || true
+                            echo "Removing container: \$CONTAINER (\$CONTAINER_ID)"
+                            docker rm \$CONTAINER_ID || true
+                        else
+                            echo "Container \$CONTAINER not found. Skipping."
+                        fi
+                    done
+                    """
+                }
+            }
+        }
+
+        stage('Remove Old Docker Images') {
+            steps {
+                script {
+                    sh 'docker system prune -a -f || true' 
+                }
+            }
+        }
+
+        stage('Update Version') {
+    steps {
+        script {
+            if (!fileExists('front-end/VERSION.txt')) {
+                sh 'echo "1.0" > front-end/VERSION.txt'
+                echo "VERSION.txt not found in front-end/. Created with initial version: 1.0"
+            }
+
+            def currentVersion = sh(script: "cat front-end/VERSION.txt", returnStdout: true).trim()
+
+            def versionParts = currentVersion.tokenize('.')
+            versionParts[1] = (versionParts[1].toInteger() + 1).toString()
+            def newVersion = versionParts.join('.')
+
+            sh "echo ${newVersion} > front-end/VERSION.txt"
+
+            echo "Updated version for build: ${newVersion}"
+        }
+    }
+}
+
+
+        stage('Build Docker Images') {
+            steps {
+                script {
+                    sh "docker build --no-cache -t backend-service ./back-end"
+                    sh "docker build --no-cache -t frontend-service ./front-end"
+                }
+            }
+        }
+
+        stage('Deploy Application') {
+            steps {
+                script {
+                    sh "/usr/local/bin/docker-compose down || true"
+                    sh "/usr/local/bin/docker-compose up -d"
+                }
+            }
+        }
+
+        stage('Commit and Push Version Update') {
+            steps {
+                script {
+                    def finalVersion = sh(script: "cat front-end/VERSION.txt", returnStdout: true).trim()
+
+                    withCredentials([usernamePassword(credentialsId: 'github-credentials', usernameVariable: 'GIT_USERNAME', passwordVariable: 'GIT_PASSWORD')]) {
+                        sh """
+                            git config user.name "Jenkins"
+                            git config user.email "jenkins@jenkins.com"
+                            git add front-end/VERSION.txt
+                            git commit -m '[ci skip] Update version to ${finalVersion}'
+                            git push https://${GIT_USERNAME}:${GIT_PASSWORD}@github.com/aizatnazran/devops-project-planner.git HEAD:refs/heads/master
+                        """
+                    }
+
+                    echo "Committed and pushed version: ${finalVersion}"
+                }
+            }
+        }
+    }
+    post {
+        always {
+            cleanWs() 
+        }
+    }
+}
